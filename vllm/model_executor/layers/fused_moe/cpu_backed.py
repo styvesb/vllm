@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Experimental canonical CPU ownership. Loading only; execution fails closed."""
+"""Experimental canonical CPU ownership and demand-only bounded execution."""
 import os
 import re
 
@@ -96,8 +96,13 @@ class CPUBackedMoEMethod(FusedMoEMethodBase):
     def get_fused_moe_quant_config(self, layer):
         return None
 
-    def apply(self, *args, **kwargs):
-        raise RuntimeError('CPU-backed expert execution is not integrated; loading only')
+    def apply(self, layer, x, topk_weights, topk_ids,
+              shared_experts=None, shared_experts_input=None):
+        if not self.ready or not hasattr(self, 'cached_execution'):
+            raise RuntimeError('CPU-backed cache must be bound after loading')
+        if shared_experts is not None or layer.apply_router_weight_on_input:
+            raise ValueError('Unsupported shared experts or input-side routing weights')
+        return self.cached_execution.apply(self.layer_id, x, topk_weights, topk_ids)
 
 
 def expert_views(model):

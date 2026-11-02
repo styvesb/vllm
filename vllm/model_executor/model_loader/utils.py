@@ -203,6 +203,13 @@ def process_weights_after_loading(
     if hasattr(model, "process_weights_after_loading"):
         model.process_weights_after_loading()
 
+    from vllm.model_executor.layers.fused_moe.cpu_backed import enabled
+    if enabled():
+        import os
+        from residency.vllm_storage import bind_cached_execution
+        bind_cached_execution(model, int(os.environ.get(
+            'VLLM_CPU_EXPERT_CACHE_BYTES', '75497472')))
+
     # Needed for torchao model reloading via model.reload_weights
     # @kylesayrs @jerryzh168 this can be removed if callers move to `reload_weights`
     if model_config.quantization == "torchao":
