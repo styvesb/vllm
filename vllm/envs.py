@@ -615,6 +615,7 @@ def _resolve_rust_cli_path() -> str | None:
 
 
 environment_variables: dict[str, Callable[[], Any]] = {
+    "VLLM_CPU_BACKED_EXPERTS": lambda: os.getenv("VLLM_CPU_BACKED_EXPERTS", "0"),
     # ================== Installation Time Env Vars ==================
     # Target device of vLLM, supporting [cuda (by default),
     # rocm, cpu]

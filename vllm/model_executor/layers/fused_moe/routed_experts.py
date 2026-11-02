@@ -227,6 +227,11 @@ class RoutedExperts(PluggableLayer):
         """Helper method to ensure quant_method is never None and
         of the proper type.
         """
+        from .cpu_backed import CPUBackedMoEMethod, enabled, validate_config
+        if enabled():
+            from vllm.config import get_current_vllm_config
+            layer_id = validate_config(get_current_vllm_config(), quant_config, prefix)
+            return CPUBackedMoEMethod(moe_config, layer_id)
         quant_method = None
         if quant_config is not None:
             quant_method = resolve_quant_method(quant_config, self, prefix)
