@@ -192,7 +192,8 @@ class TargetDependentARSpeculator(DraftModelSpeculator):
     ) -> torch.Tensor:
         import os
         self._residency_features = [] if (
-            os.getenv('VLLM_RESIDENCY_OBSERVE', '0') == '1'
+            (os.getenv('VLLM_RESIDENCY_OBSERVE', '0') == '1'
+             or os.getenv('VLLM_RESIDENCY_GUIDED', '0') == '1')
             and self.method == 'eagle3' and not dummy_run and not is_profile
             and num_speculative_tokens == 2 and input_batch.num_reqs == 1) else None
         num_reqs = input_batch.num_reqs

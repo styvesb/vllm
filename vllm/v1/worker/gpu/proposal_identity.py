@@ -67,8 +67,8 @@ class ProposalTracker:
             if hasattr(self, 'observer'):
                 self.observer.discard('verification_mismatch', request_id)
             return None
-        if hasattr(self, 'observer'):
-            self.observer.consume(envelope)  # Scores intentionally never reach a scheduler.
+        if hasattr(self, 'observer') and not getattr(self.observer, 'guided', False):
+            self.observer.consume(envelope)  # Guided mode consumes at runner pass start.
         self.matched[request_id] = envelope
         return deepcopy(envelope)
 
@@ -87,6 +87,10 @@ def clear_identity_on_error(function):
                 tracker.pending.clear()
                 tracker.staged.clear()
                 tracker.matched.clear()
+            model = getattr(self, 'model', None)
+            execution = getattr(model, '_residency_execution', None)
+            if execution is not None and execution.guided:
+                execution.abort_forward('runner_exception')
             speculator = getattr(self, 'speculator', None)
             if speculator is not None and hasattr(speculator, '_residency_features'):
                 speculator._residency_features = None

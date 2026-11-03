@@ -615,6 +615,7 @@ def _resolve_rust_cli_path() -> str | None:
 
 
 environment_variables: dict[str, Callable[[], Any]] = {
+    "VLLM_RESIDENCY_GUIDED": lambda: os.getenv("VLLM_RESIDENCY_GUIDED", "0"),
     "VLLM_RESIDENCY_OBSERVE": lambda: os.getenv("VLLM_RESIDENCY_OBSERVE", "0"),
     "VLLM_RESIDENCY_RIDGE_ARTIFACT": lambda: os.getenv("VLLM_RESIDENCY_RIDGE_ARTIFACT", "experiments/residency_ridge_alpha10000_v1/draft_ridge.npz"),
     "VLLM_RESIDENCY_PROPOSAL_IDENTITY": lambda: os.getenv("VLLM_RESIDENCY_PROPOSAL_IDENTITY", "0"),

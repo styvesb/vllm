@@ -1135,9 +1135,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
     def _proposal_tracker(self):
         import os
+        guide = os.getenv('VLLM_RESIDENCY_GUIDED', '0')
+        if guide not in ('0', '1'):
+            raise ValueError('VLLM_RESIDENCY_GUIDED must be 0 or 1')
         observe = os.getenv('VLLM_RESIDENCY_OBSERVE', '0')
         if observe not in ('0', '1'):
             raise ValueError('VLLM_RESIDENCY_OBSERVE must be 0 or 1')
+        observe = '1' if guide == '1' else observe
         if observe == '1' and os.getenv('VLLM_RESIDENCY_PROPOSAL_IDENTITY', '0') != '1':
             raise ValueError('Observation requires proposal identity validation')
         if os.getenv('VLLM_RESIDENCY_PROPOSAL_IDENTITY', '0') != '1':
@@ -1154,9 +1158,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self._residency_proposals.observer = RidgeObserver.from_artifact(os.getenv(
                 'VLLM_RESIDENCY_RIDGE_ARTIFACT',
                 'experiments/residency_ridge_alpha10000_v1/draft_ridge.npz'))
+        if hasattr(self._residency_proposals, 'observer'):
+            self._residency_proposals.observer.guided = guide == '1'
         return self._residency_proposals
 
     def _remove_request(self, req_id: str) -> bool:
+        execution = getattr(getattr(self, 'model', None), '_residency_execution', None)
+        if execution is not None and execution.guided:
+            execution.abort_forward('request_removed')
         if (tracker := self._proposal_tracker()) is not None:
             tracker.remove(req_id)
         # Call model_state.remove_request *before* req_states.remove_request
@@ -2057,6 +2066,18 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                         or bool(input_batch.is_prefilling_np[row])
                         or self.adaptive_verification is not None)
 
+            execution = getattr(self.model, '_residency_execution', None)
+            if execution is not None and execution.guided:
+                scores = None
+                reason = 'missing_or_mismatched_prediction'
+                if dummy_run or is_profile:
+                    reason = 'profiling'
+                elif input_batch.has_prefill:
+                    reason = 'prefill'
+                elif tracker is not None and hasattr(tracker, 'observer') and len(tracker.matched) == 1:
+                    scores = tracker.observer.consume(next(iter(tracker.matched.values())))
+                execution.begin_forward(scores, reason)
+
             with set_forward_context(
                 attn_metadata,
                 self.vllm_config,
@@ -2088,6 +2109,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     # Eager (NONE): call the raw model directly.
                     model_output = self.model(**model_inputs)
 
+        execution = getattr(self.model, '_residency_execution', None)
+        if execution is not None and execution.guided:
+            execution.end_forward()
         self.kv_connector.finish_forward()
 
         if self.is_last_pp_rank:

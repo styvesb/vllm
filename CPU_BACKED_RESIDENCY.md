@@ -62,3 +62,19 @@ Milestone 2 smoke. Median copy/preprocessing/projection wall times over 6 sample
 0.072/0.067/2.552 ms. Full details, timing limits, CPU coverage and the exact
 scikit-learn preprocessing compatibility correction are in companion RESIDENCY.md.
 No guided admissions, residency changes or pass-ownership changes were added.
+
+Milestone 4 adds default-off `VLLM_RESIDENCY_GUIDED=1`. The V2 runner consumes a
+validated prediction before target execution and owns guided pass begin/end;
+MoE layers advance that existing pass only. Demand/observation retain their old
+layer-owned lifecycle. Missing/profile/prefill predictions use demand-only passes;
+exceptions/request removal abort active guided state. Existing four-layer K=8
+policy, locks, budget, mandatory routing and synchronous transfers are retained.
+
+Approved one-load/cold-cache three-mode correctness comparison passed with
+identical output token IDs and fixed 75,497,472-byte slot pointers. Demand and
+observation: 6578 mandatory loads, zero speculative loads. Guided: 1920 predicted
+admissions plus 5667 mandatory loads, 7587 total. All load/byte accounting balanced;
+48 target layers ran with CPU-owned full expert tensors and no full expert GPU
+parameters. Five guided passes and two demand fallbacks completed without resets.
+Total transfers increased in this request; no performance benefit is claimed.
+See companion RESIDENCY.md and experiments/guided_comparison_v1 for details.
