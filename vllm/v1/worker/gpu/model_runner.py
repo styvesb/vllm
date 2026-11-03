@@ -2241,6 +2241,20 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 input_batch, draft_lookahead=1
             )
 
+        if (tracker := self._proposal_tracker()) is not None:
+            if not hasattr(self, '_residency_spec_stats'):
+                self._residency_spec_stats = dict(proposals=0, proposed_tokens=0,
+                    verifications=0, verified_tokens=0, accepted_tokens=0)
+            stats = self._residency_spec_stats
+            drafts = input_batch.num_draft_tokens_per_req
+            if drafts is not None:
+                rejected = num_rejected.cpu().tolist()
+                for d, r in zip(drafts, rejected):
+                    if int(d) > 0:
+                        stats['verifications'] += 1
+                        stats['verified_tokens'] += int(d)
+                        stats['accepted_tokens'] += max(0, int(d)-int(r))
+
         # Postprocess results and update request states.
         # NOTE: This is intentionally done after creating the AsyncOutput,
         # ensuring that `copy_event` is recorded before calling postprocess.
@@ -2304,6 +2318,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 if self.speculator is not None:
                     proposed = self.req_states.draft_tokens[input_batch.idx_mapping, :num_spec_tokens].cpu().tolist()
                     starts = self.req_states.num_computed_tokens.gpu[input_batch.idx_mapping].cpu().tolist()
+                    self._residency_spec_stats['proposals'] += len(proposed)
+                    self._residency_spec_stats['proposed_tokens'] += sum(
+                        sum(t >= 0 for t in row) for row in proposed)
                     for row, rid in enumerate(input_batch.req_ids):
                         identity = tracker.publish(rid, int(starts[row]), proposed[row],
                             unsupported=bool(input_batch.is_prefilling_np[row])

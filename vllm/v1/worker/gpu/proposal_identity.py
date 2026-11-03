@@ -12,6 +12,7 @@ class ProposalTracker:
         self.pending = {}
         self.staged = {}
         self.matched = {}
+        self.events = []
 
     def remove(self, request_id):
         for mapping in (self.requests, self.pending, self.staged, self.matched):
@@ -48,6 +49,12 @@ class ProposalTracker:
 
     def verify(self, request_id, tokens, positions, *, unsupported=False):
         envelope = self.staged.pop(request_id, None)
+        if len(self.events) < 128:
+            self.events.append(dict(request_id=request_id, envelope=deepcopy(envelope),
+                actual_tokens=list(tokens), actual_positions=list(positions),
+                matched=not unsupported and envelope is not None
+                and positions == [envelope['target_start'], *envelope['positions']]
+                and len(tokens) == 3 and tokens[1:] == envelope['tokens']))
         if (unsupported or envelope is None
                 or positions != [envelope['target_start'], *envelope['positions']]
                 or len(tokens) != 3 or tokens[1:] != envelope['tokens']):

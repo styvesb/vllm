@@ -17,7 +17,25 @@ def enabled():
     return value == '1'
 
 
+def validate_speculation(spec, async_scheduling=False):
+    if spec is None:
+        return
+    draft = spec.draft_model_config
+    hf = getattr(draft.hf_config, 'model', draft.hf_config)
+    if (async_scheduling or spec.method != 'eagle3' or spec.num_speculative_tokens != 2
+            or spec.enable_adaptive_verification
+            or spec.num_speculative_tokens_per_batch_size is not None
+            or spec.rejection_sample_method != 'standard'
+            or draft.quantization is not None or draft.dtype != torch.bfloat16
+            or hf.model_type != 'llama'
+            or draft.architectures != ['LlamaForCausalLMEagle3']
+            or hf.hidden_size != 2048
+            or hf.num_hidden_layers != 1):
+        raise ValueError('CPU-backed speculation supports only synchronous fixed two-token BF16 dense Llama EAGLE-3')
+
+
 def validate_config(config, quant_config, prefix):
+    validate_speculation(config.speculative_config, config.scheduler_config.async_scheduling)
     model, parallel = config.model_config, config.parallel_config
     hf = model.hf_text_config
     match = re.search(r'(?:^|\.)layers\.(\d+)\.mlp\.experts$', prefix)
@@ -33,7 +51,7 @@ def validate_config(config, quant_config, prefix):
             or parallel.tensor_parallel_size != 1 or parallel.pipeline_parallel_size != 1
             or parallel.data_parallel_size != 1 or parallel.enable_expert_parallel
             or parallel.enable_eplb or parallel.use_sequence_parallel_moe
-            or config.speculative_config is not None or config.lora_config is not None
+            or config.lora_config is not None
             or int(config.compilation_config.mode) != 0
             or config.kernel_config.moe_backend not in ('auto', 'triton')
             or parallel.enable_dbo
@@ -44,7 +62,7 @@ def validate_config(config, quant_config, prefix):
             or str(config.load_config.load_format) not in ('auto', 'safetensors')):
         raise ValueError('CPU-backed experts require canonical BF16 Qwen3-30B-A3B, '
                          'single GPU/request, eager, safetensors, no quantization, '
-                         'parallelism, LoRA, speculation, or parameter offloading')
+                         'parallelism, LoRA, or parameter offloading')
     return int(match[1])
 
 

@@ -32,3 +32,18 @@ runner. Default tracing is off. Token acceptance, cache decisions, pass ownershi
 and the speculative-runtime exclusion are unchanged. CPU fake-batch coverage is
 in the companion project's `tests/test_proposal_identity.py`; GPU EAGLE integration
 is not validated. See companion RESIDENCY.md for the inspected path and limitations.
+
+Milestone 2: supported speculation is synchronous, fixed two-token BF16
+`LlamaForCausalLMEagle3` with standard rejection sampling, no adaptive/dynamic
+proposal sizing and the original target restrictions. The draft has dense MLPs
+and uses normal GPU storage; only target RoutedExperts use the shared cache.
+Optional identity tracing records bounded alignment events and basic proposal /
+verification / acceptance counts. No Ridge, cache-policy or pass-ownership changes.
+
+Approved companion smoke `experiments/eagle_demand_smoke_v3` passed on L40S:
+7 proposals, 14 proposed tokens, 6 verification passes, 12 verified draft tokens,
+5 accepted draft tokens; all 5 supported identity envelopes matched. All 48 target
+layers ran, 96 full expert parameters remained CPU-backed, and the shared cache
+used 75,497,472 bytes. Cache hits/misses/evictions: 2254/6962/6954 (includes startup).
+The draft had no CPU-backed method or cache. Report errors were empty. Both
+processes exited; GPU memory was released. See companion RESIDENCY.md for limits.
