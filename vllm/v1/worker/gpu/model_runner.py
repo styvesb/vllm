@@ -27,6 +27,8 @@ from typing import Any, NamedTuple
 
 import numpy as np
 import torch
+
+from vllm.v1.worker.gpu.proposal_identity import clear_identity_on_error
 import torch.nn as nn
 
 import vllm.envs as envs
@@ -1131,7 +1133,18 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         )
         return cuda_graph_size
 
+    def _proposal_tracker(self):
+        import os
+        if os.getenv('VLLM_RESIDENCY_PROPOSAL_IDENTITY', '0') != '1':
+            return None
+        if not hasattr(self, '_residency_proposals'):
+            from .proposal_identity import ProposalTracker
+            self._residency_proposals = ProposalTracker()
+        return self._residency_proposals
+
     def _remove_request(self, req_id: str) -> bool:
+        if (tracker := self._proposal_tracker()) is not None:
+            tracker.remove(req_id)
         # Call model_state.remove_request *before* req_states.remove_request
         # so the model_state can still look up the slot index.
         self.model_state.remove_request(req_id)
@@ -1188,6 +1201,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             # with the updated prompt_token_ids and mm_features.
             self._remove_request(req_id)
 
+            if (tracker := self._proposal_tracker()) is not None:
+                tracker.start(req_id)
             prompt_len = new_req_data.prompt_len
             sampling_params = new_req_data.sampling_params
             self.req_states.add_request(
@@ -1716,6 +1731,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         )
 
     @torch.inference_mode()
+    @clear_identity_on_error
     def execute_model(
         self,
         scheduler_output: SchedulerOutput,
@@ -1727,6 +1743,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         valid_dummy_state_slots: bool = False,
         randomize_inputs: bool = False,
     ) -> ModelRunnerOutput | IntermediateTensors | None:
+        if (tracker := self._proposal_tracker()) is not None:
+            tracker.begin_step(scheduler_output.proposal_identities,
+                               unsupported=dummy_run or is_profile)
         if not dummy_run:
             # Update the request states.
             self.update_pp_decode_requests()
@@ -2012,6 +2031,18 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 num_active_loras=batch_desc.num_active_loras,
             )
 
+            if (tracker := self._proposal_tracker()) is not None:
+                bounds = input_batch.query_start_loc.cpu().tolist()
+                tokens = input_batch.input_ids.cpu().tolist()
+                positions = input_batch.positions.cpu().tolist()
+                for row, rid in enumerate(input_batch.req_ids):
+                    start, end = bounds[row:row+2]
+                    tracker.verify(rid, tokens[start:end], positions[start:end],
+                        unsupported=dummy_run or is_profile
+                        or len(scheduler_output.scheduled_spec_decode_tokens.get(rid, ())) != 2
+                        or bool(input_batch.is_prefilling_np[row])
+                        or self.adaptive_verification is not None)
+
             with set_forward_context(
                 attn_metadata,
                 self.vllm_config,
@@ -2085,6 +2116,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
     @torch.inference_mode()
     @step_eplb_after()
+    @clear_identity_on_error
     def sample_tokens(
         self, grammar_output: GrammarOutput | None
     ) -> AsyncOutput | ModelRunnerOutput | None:
@@ -2267,6 +2299,18 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 input_batch,
                 self.req_states.draft_tokens[input_batch.idx_mapping, :num_spec_tokens],
             )
+            if (tracker := self._proposal_tracker()) is not None:
+                envelopes = {}
+                if self.speculator is not None:
+                    proposed = self.req_states.draft_tokens[input_batch.idx_mapping, :num_spec_tokens].cpu().tolist()
+                    starts = self.req_states.num_computed_tokens.gpu[input_batch.idx_mapping].cpu().tolist()
+                    for row, rid in enumerate(input_batch.req_ids):
+                        identity = tracker.publish(rid, int(starts[row]), proposed[row],
+                            unsupported=bool(input_batch.is_prefilling_np[row])
+                            or self.adaptive_verification is not None)
+                        if identity is not None:
+                            envelopes[rid] = identity
+                self.draft_tokens_handler.proposal_identities = envelopes
             if self.pp_handler is not None:
                 self.pp_handler.broadcast_drafts(
                     self.req_states.draft_tokens, input_batch

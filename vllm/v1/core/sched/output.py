@@ -308,6 +308,8 @@ class SchedulerOutput:
     # Number of spec tokens to schedule for the next step.
     num_spec_tokens_to_schedule: int = 0
 
+    proposal_identities: dict[str, dict] = field(default_factory=dict)
+
     # Deprecated: cascade attention has been removed, so this is always empty.
     # Kept for out-of-tree schedulers and workers.
     num_common_prefix_blocks: list[int] = field(default_factory=list)

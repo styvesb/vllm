@@ -369,6 +369,7 @@ class DraftTokenIds:
     req_ids: list[str]
     # num_reqs x num_draft_tokens
     draft_token_ids: list[list[int]]
+    proposal_identities: dict[str, dict] = field(default_factory=dict)
 
 
 def make_empty_encoder_model_runner_output(

@@ -1504,6 +1504,10 @@ class Scheduler(SchedulerInterface):
             num_scheduled_tokens=num_scheduled_tokens,
             total_num_scheduled_tokens=total_num_scheduled_tokens,
             scheduled_spec_decode_tokens=scheduled_spec_decode_tokens,
+            proposal_identities={rid: request.residency_proposal_identity
+                for rid in scheduled_spec_decode_tokens
+                if (request := self.requests.get(rid)) is not None
+                and getattr(request, 'residency_proposal_identity', None) is not None},
             scheduled_encoder_inputs=scheduled_encoder_inputs,
             scheduled_encoder_input_stats=scheduled_encoder_input_stats,
             preempted_req_ids=self.reset_preempted_req_ids,
@@ -2563,6 +2567,8 @@ class Scheduler(SchedulerInterface):
                     request.spec_token_ids = []
                 continue
 
+            request.residency_proposal_identity = draft_token_ids.proposal_identities.get(req_id)
+
             # Add newly generated spec token ids to the request.
             request.spec_token_ids = self.structured_output_manager.validate_tokens(
                 request, spec_token_ids
@@ -2582,6 +2588,11 @@ class Scheduler(SchedulerInterface):
             if request is None or request.is_finished():
                 # The request may have been finished. Skip.
                 continue
+
+            scheduler_output.proposal_identities.pop(req_id, None)
+            identity = draft_token_ids.proposal_identities.get(req_id)
+            if identity is not None:
+                scheduler_output.proposal_identities[req_id] = identity
 
             placeholder_spec_tokens = sched_spec_tokens.get(req_id)
             if not placeholder_spec_tokens:

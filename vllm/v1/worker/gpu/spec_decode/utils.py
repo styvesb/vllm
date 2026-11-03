@@ -86,7 +86,8 @@ class DraftTokensHandler:
         else:
             # This case only happens when async scheduling is disabled.
             draft_token_ids = [[-1] * self.num_draft_tokens for _ in self.req_ids]
-        return DraftTokenIds(self.req_ids, draft_token_ids)
+        return DraftTokenIds(self.req_ids, draft_token_ids,
+                             getattr(self, 'proposal_identities', {}))
 
 
 def get_parallel_drafting_token_id(hf_config) -> int:

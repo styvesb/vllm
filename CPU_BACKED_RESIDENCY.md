@@ -23,3 +23,12 @@ eager, demand-only. Speculation is still rejected. See the companion
 Use the isolated `.venv-residency` interpreter and existing project cache;
 original installed vLLM and `.venv` are preserved. This documentation commit
 changes no runtime behavior.
+
+Milestone 1 adds optional proposal identity metadata under
+`VLLM_RESIDENCY_PROPOSAL_IDENTITY=1`. It transports an immutable-by-convention
+primitive envelope through DraftTokenIds, scheduler Request state and
+SchedulerOutput, then checks the actual prepared tokens/positions in the V2
+runner. Default tracing is off. Token acceptance, cache decisions, pass ownership,
+and the speculative-runtime exclusion are unchanged. CPU fake-batch coverage is
+in the companion project's `tests/test_proposal_identity.py`; GPU EAGLE integration
+is not validated. See companion RESIDENCY.md for the inspected path and limitations.
