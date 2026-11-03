@@ -78,3 +78,13 @@ admissions plus 5667 mandatory loads, 7587 total. All load/byte accounting balan
 parameters. Five guided passes and two demand fallbacks completed without resets.
 Total transfers increased in this request; no performance benefit is claimed.
 See companion RESIDENCY.md and experiments/guided_comparison_v1 for details.
+
+Milestone 5 Phase A records host clone-enqueue and existing identity-readiness
+copy waits, without adding CUDA synchronizations or changing proposal math.
+Observers are explicitly inactive in later demand-mode blocks so reversed mode
+ordering cannot create spurious prediction-consumption/rejection diagnostics.
+Companion cache/scheduler instrumentation separates inclusive admission and
+planning/release times and audits load provenance; policy/lifecycle are unchanged.
+The companion Phase B streaming driver is CPU/fake-engine tested only and awaits
+a separately approved GPU pilot. No GPU evaluation was run in Phase A; full plan
+and exact commands are in companion PERFORMANCE_EVALUATION_PLAN.md.

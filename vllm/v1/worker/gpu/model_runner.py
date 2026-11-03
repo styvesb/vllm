@@ -1160,6 +1160,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 'experiments/residency_ridge_alpha10000_v1/draft_ridge.npz'))
         if hasattr(self._residency_proposals, 'observer'):
             self._residency_proposals.observer.guided = guide == '1'
+            self._residency_proposals.observer.enabled = observe == '1'
         return self._residency_proposals
 
     def _remove_request(self, req_id: str) -> bool:
@@ -2282,7 +2283,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         if (tracker := self._proposal_tracker()) is not None:
             if not hasattr(self, '_residency_spec_stats'):
                 self._residency_spec_stats = dict(proposals=0, proposed_tokens=0,
-                    verifications=0, verified_tokens=0, accepted_tokens=0)
+                    verifications=0, verified_tokens=0, accepted_tokens=0, identity_readiness_ns=0)
             stats = self._residency_spec_stats
             drafts = input_batch.num_draft_tokens_per_req
             if drafts is not None:
@@ -2354,8 +2355,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             if (tracker := self._proposal_tracker()) is not None:
                 envelopes = {}
                 if self.speculator is not None:
+                    from time import perf_counter_ns
+                    readiness_start = perf_counter_ns()
                     proposed = self.req_states.draft_tokens[input_batch.idx_mapping, :num_spec_tokens].cpu().tolist()
                     starts = self.req_states.num_computed_tokens.gpu[input_batch.idx_mapping].cpu().tolist()
+                    self._residency_spec_stats['identity_readiness_ns'] += perf_counter_ns()-readiness_start
                     self._residency_spec_stats['proposals'] += len(proposed)
                     self._residency_spec_stats['proposed_tokens'] += sum(
                         sum(t >= 0 for t in row) for row in proposed)
@@ -2365,14 +2369,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                             or self.adaptive_verification is not None)
                         if identity is not None:
                             envelopes[rid] = identity
-                            if hasattr(tracker, 'observer'):
+                            if hasattr(tracker, 'observer') and getattr(tracker.observer, 'enabled', True):
                                 from time import perf_counter_ns
                                 start_copy = perf_counter_ns()
                                 steps = getattr(self.speculator, '_residency_features', None)
                                 if steps is not None and len(steps) == 2:
                                     features = torch.stack(steps, dim=0)[:, row].float().cpu().numpy()
                                     copy_ns = perf_counter_ns()-start_copy
-                                    tracker.observer.publish(identity, features, copy_ns)
+                                    tracker.observer.publish(identity, features, copy_ns,
+                                        getattr(self.speculator, '_residency_capture_enqueue_ns', 0))
                                 else:
                                     tracker.observer.discard('missing_capture')
                 if self.speculator is not None:

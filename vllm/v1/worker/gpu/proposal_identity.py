@@ -67,7 +67,8 @@ class ProposalTracker:
             if hasattr(self, 'observer'):
                 self.observer.discard('verification_mismatch', request_id)
             return None
-        if hasattr(self, 'observer') and not getattr(self.observer, 'guided', False):
+        if (hasattr(self, 'observer') and getattr(self.observer, 'enabled', True)
+                and not getattr(self.observer, 'guided', False)):
             self.observer.consume(envelope)  # Guided mode consumes at runner pass start.
         self.matched[request_id] = envelope
         return deepcopy(envelope)
