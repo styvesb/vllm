@@ -47,3 +47,18 @@ layers ran, 96 full expert parameters remained CPU-backed, and the shared cache
 used 75,497,472 bytes. Cache hits/misses/evictions: 2254/6962/6954 (includes startup).
 The draft had no CPU-backed method or cache. Report errors were empty. Both
 processes exited; GPU memory was released. See companion RESIDENCY.md for limits.
+
+Milestone 3 adds opt-in `VLLM_RESIDENCY_OBSERVE=1` feature capture and NumPy Ridge
+observation via the companion project's `RidgeObserver`. It requires the existing
+identity tracer and supported two-token eager EAGLE baseline. Draft model sample
+hidden states are cloned at steps 0 and 1, then copied together and associated
+with the existing envelope. Matching verification consumes/discards scores;
+no scores enter the cache/scheduler. Default mode remains disabled.
+
+Approved observation smoke passed: 6 supported captures/predictions, 5 matching
+verifications, 1 unused prediction discarded, one validated artifact load and no
+pending result or report errors. Output and cache counters matched the saved
+Milestone 2 smoke. Median copy/preprocessing/projection wall times over 6 samples:
+0.072/0.067/2.552 ms. Full details, timing limits, CPU coverage and the exact
+scikit-learn preprocessing compatibility correction are in companion RESIDENCY.md.
+No guided admissions, residency changes or pass-ownership changes were added.

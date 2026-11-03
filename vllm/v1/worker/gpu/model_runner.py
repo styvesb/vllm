@@ -1135,11 +1135,25 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
     def _proposal_tracker(self):
         import os
+        observe = os.getenv('VLLM_RESIDENCY_OBSERVE', '0')
+        if observe not in ('0', '1'):
+            raise ValueError('VLLM_RESIDENCY_OBSERVE must be 0 or 1')
+        if observe == '1' and os.getenv('VLLM_RESIDENCY_PROPOSAL_IDENTITY', '0') != '1':
+            raise ValueError('Observation requires proposal identity validation')
         if os.getenv('VLLM_RESIDENCY_PROPOSAL_IDENTITY', '0') != '1':
             return None
         if not hasattr(self, '_residency_proposals'):
             from .proposal_identity import ProposalTracker
             self._residency_proposals = ProposalTracker()
+        if observe == '1' and not hasattr(self._residency_proposals, 'observer'):
+            from vllm.model_executor.layers.fused_moe.cpu_backed import enabled, validate_config
+            if not enabled() or self.speculative_config is None:
+                raise ValueError('Observation requires CPU-backed EAGLE-3')
+            validate_config(self.vllm_config, None, 'model.layers.0.mlp.experts')
+            from residency.observation import RidgeObserver
+            self._residency_proposals.observer = RidgeObserver.from_artifact(os.getenv(
+                'VLLM_RESIDENCY_RIDGE_ARTIFACT',
+                'experiments/residency_ridge_alpha10000_v1/draft_ridge.npz'))
         return self._residency_proposals
 
     def _remove_request(self, req_id: str) -> bool:
@@ -2327,6 +2341,18 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                             or self.adaptive_verification is not None)
                         if identity is not None:
                             envelopes[rid] = identity
+                            if hasattr(tracker, 'observer'):
+                                from time import perf_counter_ns
+                                start_copy = perf_counter_ns()
+                                steps = getattr(self.speculator, '_residency_features', None)
+                                if steps is not None and len(steps) == 2:
+                                    features = torch.stack(steps, dim=0)[:, row].float().cpu().numpy()
+                                    copy_ns = perf_counter_ns()-start_copy
+                                    tracker.observer.publish(identity, features, copy_ns)
+                                else:
+                                    tracker.observer.discard('missing_capture')
+                if self.speculator is not None:
+                    self.speculator._residency_features = None
                 self.draft_tokens_handler.proposal_identities = envelopes
             if self.pp_handler is not None:
                 self.pp_handler.broadcast_drafts(

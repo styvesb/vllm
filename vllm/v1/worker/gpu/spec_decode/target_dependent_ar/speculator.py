@@ -190,6 +190,11 @@ class TargetDependentARSpeculator(DraftModelSpeculator):
         is_profile: bool = False,
         num_speculative_tokens: int | None = None,
     ) -> torch.Tensor:
+        import os
+        self._residency_features = [] if (
+            os.getenv('VLLM_RESIDENCY_OBSERVE', '0') == '1'
+            and self.method == 'eagle3' and not dummy_run and not is_profile
+            and num_speculative_tokens == 2 and input_batch.num_reqs == 1) else None
         num_reqs = input_batch.num_reqs
         if num_speculative_tokens is None:
             num_speculative_tokens = self.num_speculative_steps
@@ -461,6 +466,8 @@ class TargetDependentARSpeculator(DraftModelSpeculator):
             )
 
         sample_hidden_states = last_hidden_states[last_token_indices]
+        if getattr(self, '_residency_features', None) is not None:
+            self._residency_features.append(sample_hidden_states.detach().clone())
         self.draft_tokens[:num_reqs, 0] = self.sample_draft(
             sample_hidden_states,
             sample_src_positions,
@@ -644,6 +651,8 @@ class TargetDependentARSpeculator(DraftModelSpeculator):
         # Sample the draft tokens.
         sample_hidden_states = last_hidden_states[:num_reqs]
         sample_src_positions = self.sample_src_positions[:num_reqs]
+        if getattr(self, '_residency_features', None) is not None:
+            self._residency_features.append(sample_hidden_states.detach().clone())
         draft_tokens = self.sample_draft(
             sample_hidden_states,
             sample_src_positions,

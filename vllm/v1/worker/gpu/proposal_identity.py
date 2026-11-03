@@ -15,6 +15,8 @@ class ProposalTracker:
         self.events = []
 
     def remove(self, request_id):
+        if hasattr(self, 'observer'):
+            self.observer.discard('request_removed', request_id)
         for mapping in (self.requests, self.pending, self.staged, self.matched):
             mapping.pop(request_id, None)
 
@@ -41,11 +43,15 @@ class ProposalTracker:
         self.staged, self.matched = {}, {}
         pending, self.pending = self.pending, {}
         if unsupported:
+            if hasattr(self, 'observer'):
+                self.observer.discard('unsupported_step')
             return
         for request_id, envelope in echoed.items():
             if (envelope == pending.get(request_id) and envelope is not None
                     and self.requests.get(request_id) == envelope['generation']):
                 self.staged[request_id] = deepcopy(envelope)
+        if hasattr(self, 'observer'):
+            self.observer.retain(list(self.staged.values()))
 
     def verify(self, request_id, tokens, positions, *, unsupported=False):
         envelope = self.staged.pop(request_id, None)
@@ -58,7 +64,11 @@ class ProposalTracker:
         if (unsupported or envelope is None
                 or positions != [envelope['target_start'], *envelope['positions']]
                 or len(tokens) != 3 or tokens[1:] != envelope['tokens']):
+            if hasattr(self, 'observer'):
+                self.observer.discard('verification_mismatch', request_id)
             return None
+        if hasattr(self, 'observer'):
+            self.observer.consume(envelope)  # Scores intentionally never reach a scheduler.
         self.matched[request_id] = envelope
         return deepcopy(envelope)
 
@@ -72,9 +82,14 @@ def clear_identity_on_error(function):
         except Exception:
             tracker = getattr(self, '_residency_proposals', None)
             if tracker is not None:
+                if hasattr(tracker, 'observer'):
+                    tracker.observer.discard('execution_error')
                 tracker.pending.clear()
                 tracker.staged.clear()
                 tracker.matched.clear()
+            speculator = getattr(self, 'speculator', None)
+            if speculator is not None and hasattr(speculator, '_residency_features'):
+                speculator._residency_features = None
             handler = getattr(self, 'draft_tokens_handler', None)
             if handler is not None and hasattr(handler, 'proposal_identities'):
                 handler.proposal_identities = {}
