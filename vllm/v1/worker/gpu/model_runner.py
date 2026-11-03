@@ -1165,7 +1165,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
     def _remove_request(self, req_id: str) -> bool:
         execution = getattr(getattr(self, 'model', None), '_residency_execution', None)
-        if execution is not None and execution.guided:
+        if execution is not None and (execution.guided or getattr(execution, 'transfer_mode', 'sync') == 'async'):
             execution.abort_forward('request_removed')
         if (tracker := self._proposal_tracker()) is not None:
             tracker.remove(req_id)
@@ -2453,6 +2453,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
     def shutdown(self) -> None:
         """Release GPU tensors (model weights, KV caches, workspace) so that
         memory is reclaimable when running in the same process."""
+        execution = getattr(getattr(self, 'model', None), '_residency_execution', None)
+        if execution is not None:
+            execution.cache.drain_transfers()
         torch.accelerator.synchronize()
         if self.aux_output_connector is not None:
             self.aux_output_connector.close()

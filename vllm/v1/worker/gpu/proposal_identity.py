@@ -90,7 +90,7 @@ def clear_identity_on_error(function):
                 tracker.matched.clear()
             model = getattr(self, 'model', None)
             execution = getattr(model, '_residency_execution', None)
-            if execution is not None and execution.guided:
+            if execution is not None and (execution.guided or getattr(execution, 'transfer_mode', 'sync') == 'async'):
                 execution.abort_forward('runner_exception')
             speculator = getattr(self, 'speculator', None)
             if speculator is not None and hasattr(speculator, '_residency_features'):
