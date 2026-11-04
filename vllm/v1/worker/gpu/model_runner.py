@@ -1141,11 +1141,21 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         observe = os.getenv('VLLM_RESIDENCY_OBSERVE', '0')
         if observe not in ('0', '1'):
             raise ValueError('VLLM_RESIDENCY_OBSERVE must be 0 or 1')
-        observe = '1' if guide == '1' else observe
+        oracle_replay = bool(os.getenv('VLLM_RESIDENCY_ORACLE_REPLAY'))
+        if oracle_replay and guide != '1':
+            raise ValueError('Oracle replay requires guided mode')
+        observe = '1' if guide == '1' and not oracle_replay else observe
+        if oracle_replay:
+            observe = '0'
         if observe == '1' and os.getenv('VLLM_RESIDENCY_PROPOSAL_IDENTITY', '0') != '1':
             raise ValueError('Observation requires proposal identity validation')
         if os.getenv('VLLM_RESIDENCY_PROPOSAL_IDENTITY', '0') != '1':
             return None
+        if oracle_replay or os.getenv('VLLM_RESIDENCY_ORACLE_RECORD'):
+            from vllm.model_executor.layers.fused_moe.cpu_backed import enabled, validate_config
+            if not enabled() or self.speculative_config is None:
+                raise ValueError('Oracle requires CPU-backed EAGLE-3')
+            validate_config(self.vllm_config, None, 'model.layers.0.mlp.experts')
         if not hasattr(self, '_residency_proposals'):
             from .proposal_identity import ProposalTracker
             self._residency_proposals = ProposalTracker()
@@ -1165,7 +1175,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
     def _remove_request(self, req_id: str) -> bool:
         execution = getattr(getattr(self, 'model', None), '_residency_execution', None)
-        if execution is not None and (execution.guided or getattr(execution, 'transfer_mode', 'sync') == 'async'):
+        if execution is not None and (execution.guided or getattr(execution, 'oracle_trace', None) is not None
+                                      or getattr(execution, 'transfer_mode', 'sync') == 'async'):
             execution.abort_forward('request_removed')
         if (tracker := self._proposal_tracker()) is not None:
             tracker.remove(req_id)
@@ -2068,6 +2079,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                         or self.adaptive_verification is not None)
 
             execution = getattr(self.model, '_residency_execution', None)
+            oracle_scores = None
+            trace = getattr(execution, 'oracle_trace', None)
+            if trace is not None and tracker is not None:
+                from residency.oracle import begin_verified
+                oracle_scores = begin_verified(trace, tracker.matched, input_batch.req_ids,
+                    tokens, positions, bounds,
+                    unsupported=dummy_run or is_profile or input_batch.has_prefill)
             if execution is not None and execution.guided:
                 scores = None
                 reason = 'missing_or_mismatched_prediction'
@@ -2077,6 +2095,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     reason = 'prefill'
                 elif tracker is not None and hasattr(tracker, 'observer') and len(tracker.matched) == 1:
                     scores = tracker.observer.consume(next(iter(tracker.matched.values())))
+                if trace is not None and trace.mode == 'replay':
+                    scores = oracle_scores
                 execution.begin_forward(scores, reason)
 
             with set_forward_context(
@@ -2111,6 +2131,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     model_output = self.model(**model_inputs)
 
         execution = getattr(self.model, '_residency_execution', None)
+        if execution is not None and getattr(execution, 'oracle_trace', None) is not None:
+            execution.oracle_trace.finish()
         if execution is not None and execution.guided:
             execution.end_forward()
         self.kv_connector.finish_forward()
