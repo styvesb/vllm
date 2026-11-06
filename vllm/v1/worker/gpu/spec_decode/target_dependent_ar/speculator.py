@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+from residency import execution_trace as xt
 from typing import Any
 
 import torch
@@ -162,6 +163,7 @@ class TargetDependentARSpeculator(DraftModelSpeculator):
         self.on_multi_step_decode_end(self.max_num_reqs)
 
     @torch.inference_mode()
+    @xt.observed('draft.generation', gpu=True)
     def propose(
         self,
         input_batch: InputBatch,
@@ -214,6 +216,7 @@ class TargetDependentARSpeculator(DraftModelSpeculator):
         # request's query length to include any rejected positions. By doing so,
         # we can also reuse the attention metadata (e.g., query_start_loc,
         # seq_lens) of the target model.
+        if xt.active(): xt.emit('draft.input_preparation.start', __name__)
         if aux_hidden_states:
             assert self.method == "eagle3"
             hidden_states = self.model.combine_hidden_states(
@@ -280,6 +283,7 @@ class TargetDependentARSpeculator(DraftModelSpeculator):
 
         self._prepare_eplb_forward(num_tokens)
 
+        if xt.active(): xt.emit('draft.input_preparation.end', __name__)
         self.on_prefill_begin(num_reqs)
         if prefill_batch_desc.cg_mode == CUDAGraphMode.FULL:
             # Replay the full graph for draft prefill.
@@ -371,6 +375,7 @@ class TargetDependentARSpeculator(DraftModelSpeculator):
         return self.draft_tokens[:num_reqs]
 
     @torch.inference_mode()
+    @xt.observed('draft.model', gpu=True)
     def _run_model(
         self,
         num_tokens: int,
@@ -436,6 +441,7 @@ class TargetDependentARSpeculator(DraftModelSpeculator):
             hidden_states = ret_hidden_states
         return last_hidden_states, hidden_states
 
+    @xt.observed('draft.first_step', gpu=True)
     def _prefill(
         self,
         num_reqs: int,
@@ -472,6 +478,7 @@ class TargetDependentARSpeculator(DraftModelSpeculator):
             from time import perf_counter_ns
             capture_start = perf_counter_ns()
             self._residency_features.append(sample_hidden_states.detach().clone())
+            if xt.active(): xt.emit('ridge.feature.enqueued', __name__, payload={'shape':list(sample_hidden_states.shape), 'dtype':str(sample_hidden_states.dtype), 'device':str(sample_hidden_states.device), 'step':len(self._residency_features)-1}, measurement_kind='host_enqueue')
             self._residency_capture_enqueue_ns += perf_counter_ns()-capture_start
         self.draft_tokens[:num_reqs, 0] = self.sample_draft(
             sample_hidden_states,
@@ -631,6 +638,7 @@ class TargetDependentARSpeculator(DraftModelSpeculator):
                 num_speculative_steps,
             )
 
+    @xt.observed('draft.next_step', gpu=True)
     def _generate_draft(
         self,
         num_reqs: int,
@@ -660,6 +668,7 @@ class TargetDependentARSpeculator(DraftModelSpeculator):
             from time import perf_counter_ns
             capture_start = perf_counter_ns()
             self._residency_features.append(sample_hidden_states.detach().clone())
+            if xt.active(): xt.emit('ridge.feature.enqueued', __name__, payload={'shape':list(sample_hidden_states.shape), 'dtype':str(sample_hidden_states.dtype), 'device':str(sample_hidden_states.device), 'step':len(self._residency_features)-1}, measurement_kind='host_enqueue')
             self._residency_capture_enqueue_ns += perf_counter_ns()-capture_start
         draft_tokens = self.sample_draft(
             sample_hidden_states,

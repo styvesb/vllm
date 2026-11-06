@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+from residency import execution_trace as xt
 import contextlib
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -182,6 +183,7 @@ class AsyncOutput(AsyncModelRunnerOutput):
         for token_ids, num_tokens in zip(sampled_token_ids, num_sampled_tokens):
             del token_ids[num_tokens:]
         self.model_runner_output.sampled_token_ids = sampled_token_ids
+        if xt.active(): xt.emit('tokens.cpu_visible', __name__, payload={'tokens':sampled_token_ids, 'boundary':'existing copy_event synchronize completed'})
 
         if self.sampling_mask_tensors is not None:
             self.model_runner_output.sampling_masks = (

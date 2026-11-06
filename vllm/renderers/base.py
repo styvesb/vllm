@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+from residency import execution_trace as xt
 import asyncio
 import time
 import weakref
@@ -625,6 +626,7 @@ class BaseRenderer(ABC, Generic[_T]):
 
         return prompt
 
+    @xt.observed('prompt.tokenization')
     def _tokenize_prompt(
         self,
         prompt: TextPrompt,
@@ -636,6 +638,8 @@ class BaseRenderer(ABC, Generic[_T]):
         if want_offsets:
             kwargs = {**kwargs, "return_offsets_mapping": True}
         encoding = tokenizer(prompt["prompt"], **kwargs)
+        if xt.active():
+            xt.emit('prompt.tokens', __name__, payload={'token_count':len(encoding['input_ids']), 'token_ids':encoding['input_ids'] if xt._sink.record_text else None, 'text':prompt['prompt'] if xt._sink.record_text else '[redacted]'})
         return self._build_tokens_prompt(
             encoding["input_ids"],
             prompt,

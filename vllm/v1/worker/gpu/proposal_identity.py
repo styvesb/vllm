@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """CPU-only, fail-closed proposal metadata; never changes tokens or scheduling."""
+from residency import execution_trace as xt
 from copy import deepcopy
 from uuid import uuid4
 
@@ -35,6 +36,7 @@ class ProposalTracker:
                      request_id=request_id, sequence=self.sequence, target_start=start,
                      tokens=list(tokens), positions=[start+1, start+2])
         self.pending[request_id] = deepcopy(value)
+        if xt.active(): xt.emit('proposal.publish', __name__, proposal_id=xt.proposal_key(value), parent_operation_id=xt._sink.last_draft_operation, payload={'identity':value})
         return value
 
     def begin_step(self, echoed, *, unsupported=False):
@@ -71,6 +73,7 @@ class ProposalTracker:
                 and not getattr(self.observer, 'guided', False)):
             self.observer.consume(envelope)  # Guided mode consumes at runner pass start.
         self.matched[request_id] = envelope
+        if xt.active(): xt.emit('proposal.matched', __name__, proposal_id=xt.proposal_key(envelope), payload={'tokens':tokens,'positions':positions})
         return deepcopy(envelope)
 
 

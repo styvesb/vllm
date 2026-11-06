@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+from residency import execution_trace as xt
 import time
 import weakref
 from collections.abc import Callable, Mapping
@@ -240,6 +241,7 @@ class LLMEngine:
         prompt_text: str | None = None,
         kv_hints: KvHintsEnvelope | None = None,
     ) -> str:
+        if xt.select(request_id): xt.emit('request.engine_received', __name__)
         # Validate the request_id type.
         if not isinstance(request_id, str):
             raise TypeError(f"request_id must be a string, got {type(request_id)}")
@@ -286,6 +288,8 @@ class LLMEngine:
         self.input_processor.assign_request_id(request)
 
         req_id = request.request_id
+        if xt.select(req_id, external_id=request.external_req_id):
+            xt.emit('request.identity', __name__, payload={'external_id':request.external_req_id, 'internal_id':req_id})
 
         # Use cloned params that may have been updated in process_inputs()
         params = request.params

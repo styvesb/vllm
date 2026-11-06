@@ -16,6 +16,7 @@ hidden. Prefer utility functions defined elsewhere and call them from here,
 instead of embedding feature-specific logic directly.
 """
 
+from residency import execution_trace as xt
 import functools
 import gc
 import time
@@ -1639,6 +1640,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         )
         return block_tables, slot_mappings
 
+    @xt.observed('target.sampling', gpu=True)
     def sample(
         self,
         hidden_states: torch.Tensor,
@@ -1778,6 +1780,17 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         valid_dummy_state_slots: bool = False,
         randomize_inputs: bool = False,
     ) -> ModelRunnerOutput | IntermediateTensors | None:
+        if xt._sink is not None:
+            xt._sink.context['selected']=False
+            if not dummy_run and not is_profile:
+                for rid in scheduler_output.num_scheduled_tokens:
+                    if xt.select_internal(rid):
+                        xt.emit('target.received', __name__)
+                        execution=getattr(self.model, '_residency_execution', None)
+                        if execution is not None and not getattr(xt._sink, 'initial_cache_seen', False):
+                            xt.cache_snapshot(execution.cache, 'request.initial')
+                            xt._sink.initial_cache_seen=True
+                        break
         if (tracker := self._proposal_tracker()) is not None:
             tracker.begin_step(scheduler_output.proposal_identities,
                                unsupported=dummy_run or is_profile)
@@ -2078,6 +2091,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                         or bool(input_batch.is_prefilling_np[row])
                         or self.adaptive_verification is not None)
 
+            if xt.active() and len(input_batch.req_ids)==1:
+                rid=input_batch.req_ids[0]
+                xt.begin_pass(rid, tokens[bounds[0]:bounds[1]], positions[bounds[0]:bounds[1]], prefill=bool(input_batch.is_prefilling_np[0]), proposal=scheduler_output.proposal_identities.get(rid))
+                xt.cache_snapshot(self.model._residency_execution.cache, 'pass.initial')
             execution = getattr(self.model, '_residency_execution', None)
             oracle_scores = None
             trace = getattr(execution, 'oracle_trace', None)
@@ -2128,7 +2145,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     )
                 else:
                     # Eager (NONE): call the raw model directly.
-                    model_output = self.model(**model_inputs)
+                    with xt.scope('target.forward', __name__, gpu=True):
+                        model_output = self.model(**model_inputs)
 
         execution = getattr(self.model, '_residency_execution', None)
         if execution is not None and getattr(execution, 'oracle_trace', None) is not None:
@@ -2343,22 +2361,23 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     self.sampler, input_batch.idx_mapping
                 )
             with use_workspace_lane(self._draft_workspace_lane):
-                draft_tokens = self.speculator.propose(
-                    input_batch,
-                    attn_metadata,
-                    slot_mappings_by_layer,
-                    spec_hidden_states,
-                    aux_hidden_states,
-                    num_sampled,
-                    num_rejected,
-                    self.req_states.last_sampled_tokens,
-                    self.req_states.next_prefill_tokens,
-                    self.sampler.sampling_states.temperature.gpu,
-                    self.sampler.sampling_states.seeds.gpu,
-                    num_speculative_tokens=num_spec_tokens,
-                    dp_sync_state=dp_sync_state,
-                    mm_inputs=mm_inputs,
-                )
+                with xt.scope('draft.invocation', __name__, gpu=True):
+                    draft_tokens = self.speculator.propose(
+                        input_batch,
+                        attn_metadata,
+                        slot_mappings_by_layer,
+                        spec_hidden_states,
+                        aux_hidden_states,
+                        num_sampled,
+                        num_rejected,
+                        self.req_states.last_sampled_tokens,
+                        self.req_states.next_prefill_tokens,
+                        self.sampler.sampling_states.temperature.gpu,
+                        self.sampler.sampling_states.seeds.gpu,
+                        num_speculative_tokens=num_spec_tokens,
+                        dp_sync_state=dp_sync_state,
+                        mm_inputs=mm_inputs,
+                    )
             if num_spec_tokens < self.num_speculative_steps:
                 draft_tokens[:, num_spec_tokens:] = -1
             self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens
@@ -2385,18 +2404,25 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     self._residency_spec_stats['proposals'] += len(proposed)
                     self._residency_spec_stats['proposed_tokens'] += sum(
                         sum(t >= 0 for t in row) for row in proposed)
+                    if xt.active():
+                        for row,rid in enumerate(input_batch.req_ids):
+                            for draft_position,token in enumerate(proposed[row]):
+                                xt.emit('draft.token', __name__, proposal_id=None, verification_position=draft_position, token_id=token, parent_operation_id=xt._sink.last_draft_operation, payload={'proposal_order':draft_position,'device_completion_time':'unavailable; observed at existing batch readback'})
+                            xt.emit('draft.proposed', __name__, proposal_id=None, parent_operation_id=xt._sink.last_draft_operation, payload={'token_ids':proposed[row], 'target_start':int(starts[row]), 'prefill':bool(input_batch.is_prefilling_np[row]), 'order':list(range(len(proposed[row])))})
                     for row, rid in enumerate(input_batch.req_ids):
                         identity = tracker.publish(rid, int(starts[row]), proposed[row],
                             unsupported=bool(input_batch.is_prefilling_np[row])
                             or self.adaptive_verification is not None)
                         if identity is not None:
                             envelopes[rid] = identity
+                            if xt.active(): xt._sink.context['proposal_id']=xt.proposal_key(identity)
                             if hasattr(tracker, 'observer') and getattr(tracker.observer, 'enabled', True):
                                 from time import perf_counter_ns
                                 start_copy = perf_counter_ns()
                                 steps = getattr(self.speculator, '_residency_features', None)
                                 if steps is not None and len(steps) == 2:
-                                    features = torch.stack(steps, dim=0)[:, row].float().cpu().numpy()
+                                    with xt.scope('ridge.feature_conversion', __name__):
+                                        features = torch.stack(steps, dim=0)[:, row].float().cpu().numpy()
                                     copy_ns = perf_counter_ns()-start_copy
                                     tracker.observer.publish(identity, features, copy_ns,
                                         getattr(self.speculator, '_residency_capture_enqueue_ns', 0))

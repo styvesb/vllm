@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+from residency import execution_trace as xt
 import gc
 import os
 import queue
@@ -511,6 +512,7 @@ class EngineCore:
         `request_wave`: indicate which wave of requests this is expected to
         belong to in DP case
         """
+        if xt.select_internal(request.request_id): xt.emit('request.core_received', __name__)
         # Validate the request_id type.
         if not isinstance(request.request_id, str):
             raise TypeError(

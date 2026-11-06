@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+from residency import execution_trace as xt
 import itertools
 import time
 from collections import defaultdict, deque
@@ -1557,6 +1558,12 @@ class Scheduler(SchedulerInterface):
 
         with record_function_or_nullcontext("schedule: update_after_schedule"):
             self._update_after_schedule(scheduler_output)
+        if xt._sink is not None:
+            for rid in scheduler_output.num_scheduled_tokens:
+                if xt.select_internal(rid):
+                    self._vpr_trace_steps = getattr(self, '_vpr_trace_steps', 0)+1
+                    xt._sink.context.update(verification_pass_id=f'{rid}/pass{self._vpr_trace_steps}', proposal_id=xt.proposal_key(scheduler_output.proposal_identities.get(rid)))
+                    xt.emit('request.scheduled', __name__, payload={'scheduled_tokens':scheduler_output.num_scheduled_tokens[rid], 'draft_tokens':scheduler_output.scheduled_spec_decode_tokens.get(rid, [])})
         return scheduler_output
 
     def _build_kv_connector_meta(
@@ -2106,6 +2113,7 @@ class Scheduler(SchedulerInterface):
             if output_is_stale and request.drop_stale_output:
                 continue
 
+            if xt._sink is not None: xt.select_internal(req_id)
             req_index = model_runner_output.req_id_to_index[req_id]
             generated_token_ids = (
                 sampled_token_ids[req_index] if sampled_token_ids else []
@@ -2152,6 +2160,10 @@ class Scheduler(SchedulerInterface):
                         detailed=self.spec_decode_metrics_level == "detailed",
                     )
 
+            if xt.active():
+                proposals=list(scheduled_spec_token_ids or [])
+                accepted=max(0,len(generated_token_ids)-1) if proposals else 0
+                xt.emit('tokens.decision', __name__, proposal_id=xt.proposal_key(scheduler_output.proposal_identities.get(req_id)), payload={'proposals':proposals, 'accepted_prefix':proposals[:accepted], 'accepted_length':accepted, 'first_rejected_position':accepted if accepted<len(proposals) else None, 'discarded_suffix':proposals[accepted+1:] if accepted<len(proposals) else [], 'replacement':generated_token_ids[-1] if proposals and accepted<len(proposals) and generated_token_ids else None, 'bonus':generated_token_ids[-1] if proposals and accepted==len(proposals) and generated_token_ids else None, 'sampled_tokens':list(generated_token_ids)})
             # Free encoder inputs only after the step has actually executed.
             if request.has_encoder_inputs:
                 self._free_encoder_inputs(request)
@@ -2200,6 +2212,7 @@ class Scheduler(SchedulerInterface):
                 request.resumable = False
                 stopped = True
 
+            if xt.active(): xt.emit('tokens.emitted', __name__, proposal_id=xt.proposal_key(scheduler_output.proposal_identities.get(req_id)), payload={'token_ids':list(new_token_ids), 'stopped':stopped, 'boundary':'scheduler after stop handling'})
             routed_experts = None
             should_emit_output = bool(
                 new_token_ids or pooler_output is not None or stopped

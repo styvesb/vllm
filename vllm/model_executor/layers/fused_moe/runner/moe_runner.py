@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+from residency import execution_trace as xt
 from collections.abc import Callable, Iterable
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, cast
@@ -626,12 +627,13 @@ class MoERunner(MoERunnerInterface):
             )
         else:
             # Modular kernels: select experts first, then call routed_experts
-            topk_weights, topk_ids = self.router.select_experts(
-                hidden_states=hidden_states,
-                router_logits=router_logits,
-                topk_indices_dtype=self._quant_method.topk_indices_dtype,
-                input_ids=input_ids,
-            )
+            with xt.scope('router.select', __name__, gpu=True, layer_id=self.layer_id):
+                topk_weights, topk_ids = self.router.select_experts(
+                    hidden_states=hidden_states,
+                    router_logits=router_logits,
+                    topk_indices_dtype=self._quant_method.topk_indices_dtype,
+                    input_ids=input_ids,
+                )
 
             fused_out = self.routed_experts.forward_modular(
                 x=hidden_states,
@@ -910,7 +912,8 @@ class MoERunner(MoERunnerInterface):
                     self, hidden_states, self._combined_gate_weight, None
                 )
             else:
-                router_logits, _ = self.gate(hidden_states)
+                with xt.scope('router.gate', __name__, gpu=True, layer_id=self.layer_id):
+                    router_logits, _ = self.gate(hidden_states)
 
         with self._sequence_parallel_context():
             # TODO(bnell): parts of the dispatch/combine steps will go away once

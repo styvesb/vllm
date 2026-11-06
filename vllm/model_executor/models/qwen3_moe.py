@@ -23,6 +23,7 @@
 # limitations under the License.
 """Inference-only Qwen3MoE model compatible with HuggingFace weights."""
 
+from residency import execution_trace as xt
 from collections.abc import Iterable
 from itertools import islice
 from typing import Any
@@ -216,7 +217,9 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
             is_fused_checkpoint_transposed=is_fused_checkpoint_transposed,
         )
 
+    @xt.observed('moe.layer', gpu=True)
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        if xt.active(): xt.layer_entry(self.experts)
         assert hidden_states.dim() <= 2, (
             "Qwen3MoeSparseMoeBlock only supports 1D or 2D inputs"
         )
