@@ -2083,6 +2083,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 bounds = input_batch.query_start_loc.cpu().tolist()
                 tokens = input_batch.input_ids.cpu().tolist()
                 positions = input_batch.positions.cpu().tolist()
+                if xt.active() and len(input_batch.req_ids)==1:
+                    rid=input_batch.req_ids[0]
+                    xt.begin_pass(rid, tokens[bounds[0]:bounds[1]], positions[bounds[0]:bounds[1]], prefill=bool(input_batch.is_prefilling_np[0]), proposal=scheduler_output.proposal_identities.get(rid))
+                    xt.cache_snapshot(self.model._residency_execution.cache, 'pass.initial')
+
                 for row, rid in enumerate(input_batch.req_ids):
                     start, end = bounds[row:row+2]
                     tracker.verify(rid, tokens[start:end], positions[start:end],
@@ -2091,10 +2096,6 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                         or bool(input_batch.is_prefilling_np[row])
                         or self.adaptive_verification is not None)
 
-            if xt.active() and len(input_batch.req_ids)==1:
-                rid=input_batch.req_ids[0]
-                xt.begin_pass(rid, tokens[bounds[0]:bounds[1]], positions[bounds[0]:bounds[1]], prefill=bool(input_batch.is_prefilling_np[0]), proposal=scheduler_output.proposal_identities.get(rid))
-                xt.cache_snapshot(self.model._residency_execution.cache, 'pass.initial')
             execution = getattr(self.model, '_residency_execution', None)
             oracle_scores = None
             trace = getattr(execution, 'oracle_trace', None)
